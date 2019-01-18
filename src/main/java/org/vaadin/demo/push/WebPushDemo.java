@@ -1,81 +1,90 @@
 package org.vaadin.demo.push;
 
-import com.google.gson.JsonObject;
 import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.button.Button;
-import com.vaadin.flow.component.dependency.JavaScript;
 import com.vaadin.flow.component.html.H1;
 import com.vaadin.flow.component.html.Paragraph;
+import com.vaadin.flow.component.html.Span;
+import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.component.page.Push;
 import com.vaadin.flow.component.textfield.TextField;
+import com.vaadin.flow.notification.PushNotificationService;
 import com.vaadin.flow.router.Route;
-import com.vaadin.flow.server.InitialPageSettings;
-import com.vaadin.flow.server.PageConfigurator;
-import elemental.json.JsonFactory;
-import nl.martijndwars.webpush.Notification;
-import nl.martijndwars.webpush.PushService;
-import nl.martijndwars.webpush.Subscription;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.jose4j.lang.JoseException;
-import org.vaadin.demo.push.components.PushNotificationButton;
-
-import java.io.IOException;
-import java.security.GeneralSecurityException;
-import java.security.Security;
-import java.util.concurrent.ExecutionException;
+import com.vaadin.flow.server.PWA;
 
 @Route("")
-@JavaScript("frontend://src/web-push.js")
-public class WebPushDemo extends VerticalLayout implements PageConfigurator {
+@PWA(shortName = "Push it", name = "Push it real hard")
+public class WebPushDemo extends VerticalLayout {
 
+  private final PushNotificationService pushService;
   // DEMO ONLY. DON'T STORE KEYS IN SOURCE!
   String vapidPubKey = "BBZaPWWVHE_NDIPuYQpJS0WAo_VrGjCEBYBfvLurP6s3Cc89J2g9HZ9oPnQJopcB4fpJCf9LlZa4rMjVMsPH2o8";
   String vapidPrivateKey = "F7SfQROj-mgtcF3X54mjfR-tqEjRasPpuQ9hCj07Ask";
-  private Subscription subscription;
-  private HorizontalLayout pushMessageLayout;
-  private final PushService pushService;
 
-  public WebPushDemo() throws GeneralSecurityException {
-    Security.addProvider(new BouncyCastleProvider());
-    pushService = new PushService(vapidPubKey, vapidPrivateKey, "mailto:webmaster@vaadin.com");
+  private String subscription;
+
+  public WebPushDemo() {
+    pushService = new PushNotificationService(vapidPubKey, vapidPrivateKey, "mailto:webmaster@vaadin.com");
 
     add(new H1("Web Push"));
     add(new Paragraph("Demo app for web push notifications in Vaadin apps. You need to click disable/enable after restart as the subscription is not persisted across deploys on the server."));
-    add(new PushNotificationButton(vapidPubKey, this::setSubscription));
-    add(createPushNotificationForm());
+
+    pushService.browserSupportsPushNotifications().thenAccept(support -> {
+      if(support) {
+        add(createPushToggleButton());
+        add(createPushNotificationForm());
+      } else {
+        add(new Span("Your browser doesn't support push notifications"));
+      }
+    });
+  }
+
+  private Component createPushToggleButton() {
+    Button pushButton = new Button();
+    pushService.notificationsEnabled().thenAccept(enabled -> {
+      pushButton.setText(enabled ? "Disable notifications" : "Enable notifications");
+    });
+
+    pushButton.addClickListener(click -> {
+      pushService.notificationsEnabled().thenAccept(enabled -> {
+        if (!enabled) {
+          pushService.subscribeToNotifications().thenAccept(subscription -> {
+            this.subscription = subscription;
+            pushButton.setText("Disable notifications");
+          });
+        } else {
+          pushService.unsubscribeFromNotifications();
+          this.subscription = null;
+          pushButton.setText("Enable notifications");
+        }
+      });
+    });
+    return pushButton;
   }
 
   private Component createPushNotificationForm() {
-    pushMessageLayout = new HorizontalLayout();
-    TextField contentField = new TextField();
+    HorizontalLayout pushMessageLayout = new HorizontalLayout();
+    pushMessageLayout.setDefaultVerticalComponentAlignment(Alignment.END);
+    TextField titleField = new TextField("Title");
+    TextField contentField = new TextField("Body");
     Button sendButton = new Button("Send");
 
-    pushMessageLayout.add(contentField, sendButton);
-    pushMessageLayout.setEnabled(false);
+    pushMessageLayout.add(titleField, contentField, sendButton);
 
     sendButton.addClickListener(click -> {
-      try {
-        JsonObject payload = new JsonObject();
-        payload.addProperty("title", "Server Says");
-        payload.addProperty("body", contentField.getValue());
-        pushService.sendAsync(new Notification(subscription, payload.toString()));
-      } catch (Exception e) {
-        System.err.println("Push message sending failed!");
+      if (subscription == null) {
+        Notification.show("Enable push first");
+        return;
       }
+      pushService.sendPushMessage(subscription,
+          titleField.getValue(),
+          contentField.getValue(),
+          "/");
     });
+
+
     return pushMessageLayout;
   }
 
-  private void setSubscription(Subscription subscription) {
-    //TODO: subscription should be persisted somewhere for future use
-    this.subscription = subscription;
-    pushMessageLayout.setEnabled(subscription != null);
-  }
-
-  @Override
-  public void configurePage(InitialPageSettings pageSettings) {
-    pageSettings.addLink("manifest", "frontend/manifest.webmanifest");
-  }
 }
